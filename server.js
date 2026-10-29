@@ -1,92 +1,208 @@
+/**
+ * ============================================
+ * SAVORIA Restaurant Backend API
+ * Developed by: Rehmat Developers
+ * Lead Developer: Muhammad Waleed
+ * Contact: +92 (328) 4461097
+ * ============================================
+ */
+
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
+const morgan = require('morgan');
+const rateLimit = require('express-rate-limit');
 
+// Internal imports
+const connectDB = require('./config/database');
+const menuRoutes = require('./routes/menuRoutes');
+const orderRoutes = require('./routes/orderRoutes');
+const reservationRoutes = require('./routes/reservationRoutes');
+const errorHandler = require('./middleware/errorHandler');
+
+// Initialize Express App
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Middleware (Cross-Origin requests allow karne ke liye)
-app.use(cors());
-app.use(express.json());
+// ============================================
+// SECURITY MIDDLEWARE
+// ============================================
+app.use(helmet({
+    crossOriginResourcePolicy: { policy: 'cross-origin' }
+}));
 
-// Sample Menu Data
-const menuData = [
-  { id: 1, name: "Gourmet Beef Burger", category: "Main", price: 12.99, image: "https://images.unsplash.com/photo-1568901346375-23c9450c58cd?auto=format&fit=crop&w=500&q=80" },
-  { id: 2, name: "Margherita Pizza", category: "Main", price: 14.50, image: "https://images.unsplash.com/photo-1604382354936-07c5d9983bd3?auto=format&fit=crop&w=500&q=80" },
-  { id: 3, name: "Creamy Alfredo Pasta", category: "Main", price: 11.00, image: "https://images.unsplash.com/photo-1621996346565-e3d5d6281216?auto=format&fit=crop&w=500&q=80" },
-  { id: 4, name: "Chocolate Lava Cake", category: "Dessert", price: 6.50, image: "https://images.unsplash.com/photo-1606313564200-e75d5e30476c?auto=format&fit=crop&w=500&q=80" }
-];
+// ============================================
+// CORS CONFIGURATION
+// ============================================
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+    ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())
+    : ['*'];
 
-// In-Memory Database (Demo ke liye)
-let orders = [];
-let reservations = [];
+app.use(cors({
+    origin: function (origin, callback) {
+        // Allow requests with no origin (mobile apps, Postman, curl)
+        if (!origin) return callback(null, true);
+        
+        // Allow all origins in development
+        if (process.env.NODE_ENV !== 'production') {
+            return callback(null, true);
+        }
+        
+        // In production, check against whitelist
+        if (allowedOrigins.includes('*') || allowedOrigins.indexOf(origin) !== -1) {
+            callback(null, true);
+        } else {
+            console.warn(`CORS blocked for origin: ${origin}`);
+            callback(null, true); // Allow anyway for demo (change in production)
+        }
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+}));
 
-// 1. Health Check Endpoint
+// ============================================
+// GENERAL MIDDLEWARE
+// ============================================
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Logging middleware
+if (process.env.NODE_ENV !== 'production') {
+    app.use(morgan('dev'));
+} else {
+    app.use(morgan('combined'));
+}
+
+// ============================================
+// RATE LIMITING
+// ============================================
+const limiter = rateLimit({
+    windowMs: (parseInt(process.env.RATE_LIMIT_WINDOW) || 15) * 60 * 1000,
+    max: parseInt(process.env.RATE_LIMIT_MAX) || 100,
+    message: {
+        success: false,
+        message: 'Too many requests from this IP, please try again later.'
+    },
+    standardHeaders: true,
+    legacyHeaders: false
+});
+
+app.use('/api/', limiter);
+
+// ============================================
+// DATABASE CONNECTION
+// ============================================
+connectDB();
+
+// ============================================
+// ROOT ROUTE / HEALTH CHECK
+// ============================================
 app.get('/', (req, res) => {
-  res.send('Savoria Restaurant API is Running!');
+    res.status(200).json({
+        success: true,
+        message: '🔥 Savoria Restaurant API is Live!',
+        version: '1.0.0',
+        developer: 'Rehmat Developers',
+        lead: 'Muhammad Waleed',
+        contact: '+92 (328) 4461097',
+        location: 'Raja Jang, Kasur, Pakistan',
+        documentation: {
+            health: 'GET /api/health',
+            menu: {
+                getAll: 'GET /api/menu',
+                getByCategory: 'GET /api/menu?category=starters',
+                search: 'GET /api/menu?search=pizza',
+                getById: 'GET /api/menu/:id'
+            },
+            orders: {
+                create: 'POST /api/order',
+                getById: 'GET /api/order/:id',
+                getAll: 'GET /api/orders',
+                updateStatus: 'PATCH /api/order/:id/status'
+            },
+            reservations: {
+                create: 'POST /api/reserve',
+                getById: 'GET /api/reserve/:id',
+                getAll: 'GET /api/reservations'
+            }
+        },
+        timestamp: new Date().toISOString()
+    });
 });
 
-// 2. Get Menu Items API
-app.get('/api/menu', (req, res) => {
-  res.json({ success: true, data: menuData });
+app.get('/api/health', (req, res) => {
+    res.status(200).json({
+        success: true,
+        status: 'healthy',
+        uptime: process.uptime(),
+        memory: process.memoryUsage(),
+        timestamp: new Date().toISOString()
+    });
 });
 
-// 3. Place Food Order API
-app.post('/api/order', (req, res) => {
-  const { customerName, phone, address, items, totalAmount } = req.body;
-  
-  if (!customerName || !phone || !items || items.length === 0) {
-    return res.status(400).json({ success: false, message: "Missing required order details" });
-  }
+// ============================================
+// API ROUTES
+// ============================================
+app.use('/api/menu', menuRoutes);
+app.use('/api', orderRoutes);
+app.use('/api', reservationRoutes);
 
-  const newOrder = {
-    id: orders.length + 1,
-    customerName,
-    phone,
-    address,
-    items,
-    totalAmount,
-    status: "Pending",
-    createdAt: new Date()
-  };
-
-  orders.push(newOrder);
-  console.log("New Order Received:", newOrder);
-
-  res.status(201).json({
-    success: true,
-    message: "Order placed successfully!",
-    orderId: newOrder.id
-  });
+// ============================================
+// 404 HANDLER
+// ============================================
+app.use((req, res) => {
+    res.status(404).json({
+        success: false,
+        message: `Route ${req.originalUrl} not found`,
+        availableEndpoints: [
+            'GET /',
+            'GET /api/health',
+            'GET /api/menu',
+            'POST /api/order',
+            'POST /api/reserve'
+        ]
+    });
 });
 
-// 4. Book Table Reservation API
-app.post('/api/reserve', (req, res) => {
-  const { name, phone, date, time, guests } = req.body;
+// ============================================
+// GLOBAL ERROR HANDLER
+// ============================================
+app.use(errorHandler);
 
-  if (!name || !phone || !date || !time || !guests) {
-    return res.status(400).json({ success: false, message: "Please fill all reservation fields" });
-  }
-
-  const newReservation = {
-    id: reservations.length + 1,
-    name,
-    phone,
-    date,
-    time,
-    guests,
-    createdAt: new Date()
-  };
-
-  reservations.push(newReservation);
-  console.log("New Reservation Received:", newReservation);
-
-  res.status(201).json({
-    success: true,
-    message: "Table reserved successfully!",
-    reservationId: newReservation.id
-  });
+// ============================================
+// START SERVER
+// ============================================
+const server = app.listen(PORT, () => {
+    console.log(`
+╔═══════════════════════════════════════════════════╗
+║                                                   ║
+║     🔥 SAVORIA RESTAURANT API                     ║
+║                                                   ║
+║     Status: ✅ RUNNING                            ║
+║     Port:   ${PORT}                                   ║
+║     Env:    ${process.env.NODE_ENV || 'development'}                            ║
+║                                                   ║
+║     Developed by: Rehmat Developers               ║
+║     Lead: Muhammad Waleed                         ║
+║                                                   ║
+╚═══════════════════════════════════════════════════╝
+    `);
 });
 
-app.listen(PORT, () => {
-  console.log(`Server listening on port ${PORT}`);
+// Graceful shutdown
+process.on('SIGTERM', () => {
+    console.log('SIGTERM received, shutting down gracefully...');
+    server.close(() => {
+        console.log('Server closed');
+        process.exit(0);
+    });
 });
+
+process.on('unhandledRejection', (err) => {
+    console.error('Unhandled Promise Rejection:', err);
+    server.close(() => process.exit(1));
+});
+
+module.exports = app;
